@@ -43,11 +43,16 @@ def greedy_decode(model,source,source_mask,tokenizer_src,tokenier_tgt,max_len,de
         prob=model.project(out[:,-1])
         # select token with the max probability
         _,next_word=torch.max(prob,dim=1)
-        decoder_input=torch.cat([decoder_input,torch.empty(1,1).type_as(source).fill_(next_word.item()).to(device)])
-
+        decoder_input = torch.cat(
+    [
+        decoder_input,
+        torch.tensor([[next_word.item()]], dtype=source.dtype, device=device)
+    ],
+    dim=1,
+)
         if next_word==eos_idx:
             break
-    return decoder_input.squeese
+    return decoder_input.squeeze(0)
 
 def run_validation(model,validation_ds,tokenizer_src,tokenizer_tgt,max_len,device,print_msg,global_state,writer,num_examples=2):
     model.eval()
