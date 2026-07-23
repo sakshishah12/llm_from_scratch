@@ -21,6 +21,7 @@ import warnings
 
 from pathlib import Path
 
+
 def greedy_decode(model,source,source_mask,tokenizer_src,tokenier_tgt,max_len,device):
     sos_idx=tokenier_tgt.token_to_id('[SOS]')
     eos_idx=tokenier_tgt.token_to_id('[EOS]')
@@ -156,16 +157,23 @@ def get_ds(config):
     print(f"Max length of target sentence: {max_len_tgt}")
 
     train_dataloader = DataLoader(
-        train_ds,
-        batch_size=config["batch_size"],
-        shuffle=True,
-    )
+    train_ds,
+    batch_size=config["batch_size"],
+    shuffle=True,
+    num_workers=2,
+    pin_memory=True,
+    persistent_workers=True,
+    prefetch_factor=2,
+)
 
     val_dataloader = DataLoader(
-        val_ds,
-        batch_size=1,
-        shuffle=True,
-    )
+    val_ds,
+    batch_size=1,
+    shuffle=False,
+    num_workers=2,
+    pin_memory=True,
+    persistent_workers=True,
+)
 
     return train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt
 
@@ -203,30 +211,40 @@ def train_model(config):
         batch_iterator = tqdm(train_dataloader,desc=f'Processign epoch {epoch:02d}')
         for batch in batch_iterator:
             model.train()
-            encoder_input=batch['encoder_input'].to(device)
-            decoder_input=batch['decoder_input'].to(device)
-            encoder_mask=batch['encoder_mask'].to(device)
-            decoder_mask=batch['decoder_mask'].to(device)
+            encoder_input = batch["encoder_input"].to(device, non_blocking=True)
+            decoder_input = batch["decoder_input"].to(device, non_blocking=True)
+            encoder_mask = batch["encoder_mask"].to(device, non_blocking=True)
+            decoder_mask = batch["decoder_mask"].to(device, non_blocking=True)
+            label = batch["label"].to(device, non_blocking=True)
 
-            encoder_output=model.encode(encoder_input,encoder_mask)
-            decoder_output=model.decode(encoder_output,encoder_mask,decoder_input,decoder_mask)
-            proj_output=model.project(decoder_output)
+            optimizer.zero_grad(set_to_none=True)
 
-            label=batch['label'].to(device)
+            encoder_output = model.encode(encoder_input, encoder_mask)
+            decoder_output = model.decode(
+                encoder_output,
+                encoder_mask,
+                decoder_input,
+                decoder_mask,
+            )
 
-            loss=loss_fn(proj_output.view(-1,tokenizer_tgt.get_vocab_size()),label.view(-1))
-            batch_iterator.set_postfix({f"loss":f"{loss.item():6.3f}"})
+            proj_output = model.project(decoder_output)
 
-            writer.add_scalar('train loss', loss.item(),global_step)
-            writer.flush()
+            loss = loss_fn(
+                proj_output.view(-1, tokenizer_tgt.get_vocab_size()),
+                label.view(-1),
+            )
+
+            batch_iterator.set_postfix(loss=f"{loss.item():.3f}")
+
+            writer.add_scalar("train loss", loss.item(), global_step)
 
             loss.backward()
 
             optimizer.step()
-            optimizer.zero_grad()
 
-            global_step+=1
+            global_step += 1
 
+        writer.flush()
         run_validation(model,val_dataloader,tokenizer_src,tokenizer_tgt,config['seq_len'],device,lambda msg:batch_iterator.write(msg),global_step,writer)
 
         model_filename=get_weights_file_path(config,f'{epoch:02d}')
