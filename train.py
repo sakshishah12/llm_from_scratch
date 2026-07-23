@@ -110,7 +110,7 @@ def get_ds(config):
 
     # Shuffle and take a subset (recommended for first training)
     ds_raw = ds_raw.shuffle(seed=42)
-    ds_raw = ds_raw.select(range(100000))      # Change to 50000, 200000, etc.
+    ds_raw = ds_raw.select(range(50000))      # Change to 50000, 200000, etc.
 
     print(ds_raw[0])
 
@@ -189,11 +189,13 @@ def train_model(config):
 
     train_dataloader,val_dataloader,tokenizer_src,tokenizer_tgt=get_ds(config)
     model=get_model(config,tokenizer_src.get_vocab_size(),tokenizer_tgt.get_vocab_size()).to(device)
+    model = torch.compile(model)
 
     writer = SummaryWriter(config['experiment_name'])
 
     optimizer=torch.optim.Adam(model.parameters(),lr=config['lr'],eps=1e-9)
 
+    scaler = torch.amp.GradScaler("cuda")
     initial_epoch=0
     global_step=0
     if config['preload']:
@@ -219,28 +221,36 @@ def train_model(config):
 
             optimizer.zero_grad(set_to_none=True)
 
-            encoder_output = model.encode(encoder_input, encoder_mask)
-            decoder_output = model.decode(
-                encoder_output,
-                encoder_mask,
-                decoder_input,
-                decoder_mask,
-            )
+            with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
 
-            proj_output = model.project(decoder_output)
+                encoder_output = model.encode(
+                    encoder_input,
+                    encoder_mask,
+                )
 
-            loss = loss_fn(
-                proj_output.view(-1, tokenizer_tgt.get_vocab_size()),
-                label.view(-1),
-            )
+                decoder_output = model.decode(
+                    encoder_output,
+                    encoder_mask,
+                    decoder_input,
+                    decoder_mask,
+                )
+
+                proj_output = model.project(decoder_output)
+
+                loss = loss_fn(
+                    proj_output.view(-1, tokenizer_tgt.get_vocab_size()),
+                    label.view(-1),
+                )
 
             batch_iterator.set_postfix(loss=f"{loss.item():.3f}")
 
             writer.add_scalar("train loss", loss.item(), global_step)
 
-            loss.backward()
+            scaler.scale(loss).backward()
 
-            optimizer.step()
+            scaler.step(optimizer)
+
+            scaler.update()
 
             global_step += 1
 
