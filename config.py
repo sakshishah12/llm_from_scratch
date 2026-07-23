@@ -8,7 +8,7 @@ def get_config():
         "d_model":256,
         "lang_src":"en",
         "lang_tgt":"gu",
-        "model_folder":"weights",
+        "model_folder": "/content/drive/MyDrive/transformer_weights",
         "model_basename":"tmodel_",
         "preload":None,
         "tokenizer_file":"tokenizer_{0}.json",
