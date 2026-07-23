@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn 
 import math 
+import torch.nn.functional as F
 
 class InputEmbeddings(nn.Module):
     def __init__(self,d_model:int,vocab_size:int):
@@ -45,8 +46,9 @@ class LayerNormalization(nn.Module):
     
     def forward(self,x):
         mean=x.mean(dim=-1,keepdim=True)
-        std=x.std(dim=-1,keepdim=True)
-        return self.alpha * (x-mean)/(std+self.eps) + self.bias
+        var = x.var(dim=-1, keepdim=True, unbiased=False)
+
+        return self.alpha * (x - mean) / torch.sqrt(var + self.eps) + self.bias
 
 class FeedForwardBlock(nn.Module):
     def __init__(self,d_model:int,d_ff:int,dropout:float)->None:
@@ -59,50 +61,86 @@ class FeedForwardBlock(nn.Module):
         return self.linear_2(self.dropout(torch.relu(self.linear_1(x))))
 
 class MultiHeadAttentionBlock(nn.Module):
-    def __init__(self,d_model:int,h:int,dropout:float)->None:
+    def __init__(self, d_model: int, h: int, dropout: float):
         super().__init__()
-        self.d_model=d_model
-        self.h=h
-        assert d_model%h==0,"d_model is not divisible by h"
 
-        self.d_k=d_model//h
-        self.w_q=nn.Linear(d_model,d_model)
-        self.w_k=nn.Linear(d_model,d_model)
-        self.w_v=nn.Linear(d_model,d_model)
+        self.d_model = d_model
+        self.h = h
 
-        self.w_o=nn.Linear(d_model,d_model)
-        self.dropout=nn.Dropout(dropout)
-    
+        assert d_model % h == 0
+
+        self.d_k = d_model // h
+
+        self.w_q = nn.Linear(d_model, d_model)
+        self.w_k = nn.Linear(d_model, d_model)
+        self.w_v = nn.Linear(d_model, d_model)
+        self.w_o = nn.Linear(d_model, d_model)
+
+        self.dropout = nn.Dropout(dropout)
+
     @staticmethod
-    def attention(query,key,value,mask,dropout:nn.Dropout):
-        d_k=query.shape[-1]
+    def attention(query, key, value, mask, dropout):
 
-        attention_scores=(query @ key.transpose(-2,-1))/math.sqrt(d_k)
+        dropout_p = dropout.p if dropout is not None and dropout.training else 0.0
+
+        # Convert mask to boolean if necessary
         if mask is not None:
-            attention_scores.masked_fill_(mask==0,-1e9)
-        attention_scores=attention_scores.softmax(dim=-1)
-        if dropout is not None:
-            attention_scores=dropout(attention_scores)
-        
-        return (attention_scores @ value),attention_scores
+            mask = mask.bool()
 
-    def forward(self,q,k,v,mask):
-        query=self.w_q(q)
-        key=self.w_k(k)
-        value=self.w_v(v)
+        x = F.scaled_dot_product_attention(
+            query=query,
+            key=key,
+            value=value,
+            attn_mask=mask,
+            dropout_p=dropout_p,
+            is_causal=False,
+        )
 
-        # (batch,seq_len,d_model) --> (batch,seq_len,h,d_k) --> (batch,h,seq_len,d_k)
-        query=query.view(query.shape[0],query.shape[1],self.h,self.d_k).transpose(1,2)
-        key=key.view(key.shape[0],key.shape[1],self.h,self.d_k).transpose(1,2)
-        value=value.view(value.shape[0],value.shape[1],self.h,self.d_k).transpose(1,2)
+        return x, None
 
-        x,self.attention_scores=MultiHeadAttentionBlock.attention(query,key,value,mask,self.dropout)
+    def forward(self, q, k, v, mask):
 
-        # batch,h,seq_len,d_k --> (batch,seq_len,h,d_k) --> (batch,seq_len,d_model)
-        x=x.transpose(1,2).contiguous().view(x.shape[0],-1,self.h * self.d_k)
-        
+        query = self.w_q(q)
+        key = self.w_k(k)
+        value = self.w_v(v)
+
+        query = query.view(
+            query.shape[0],
+            query.shape[1],
+            self.h,
+            self.d_k
+        ).transpose(1, 2)
+
+        key = key.view(
+            key.shape[0],
+            key.shape[1],
+            self.h,
+            self.d_k
+        ).transpose(1, 2)
+
+        value = value.view(
+            value.shape[0],
+            value.shape[1],
+            self.h,
+            self.d_k
+        ).transpose(1, 2)
+
+        x, _ = MultiHeadAttentionBlock.attention(
+            query,
+            key,
+            value,
+            mask,
+            self.dropout,
+        )
+
+        x = (
+            x.transpose(1, 2)
+            .contiguous()
+            .view(x.shape[0], -1, self.h * self.d_k)
+        )
+
         return self.w_o(x)
-
+    
 class ResidualConnection(nn.Module):
     def __init__(self,dropout:float)->None:
         super().__init__()
@@ -162,12 +200,12 @@ class Decoder(nn.Module):
         return self.norm(x)
 
 class ProjectionLayer(nn.Module):
-    def __init__(self,d_model:int,vocab_size:int)->None:
+    def __init__(self, d_model, vocab_size):
         super().__init__()
-        self.proj=nn.Linear(d_model,vocab_size)
+        self.proj = nn.Linear(d_model, vocab_size)
 
-    def forward(self,x):
-        return torch.log_softmax(self.proj(x),dim=-1)
+    def forward(self, x):
+        return self.proj(x)
 
 class Transformer(nn.Module):
     def __init__(self,encoder:Encoder,decoder:Decoder,src_embed:InputEmbeddings,tgt_embed:InputEmbeddings,src_pos:PostionalEmbeddings,tgt_pos:PostionalEmbeddings,projection_layer:ProjectionLayer)->None:
