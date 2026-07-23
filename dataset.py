@@ -12,7 +12,7 @@ class BilingualDataset(Dataset):
         self.src_lang=src_lang
         self.tgt_lang=tgt_lang
         self.seq_len=seq_len
-        
+
         self.sos_token = torch.tensor(
     [tokenizer_src.token_to_id("[SOS]")],
     dtype=torch.int64
@@ -33,8 +33,8 @@ class BilingualDataset(Dataset):
     
     def __getitem__(self, index:Any)->Any:
         src_target_pair=self.ds[index]
-        src_text=src_target_pair['translation'][self.src_lang]
-        tgt_text=src_target_pair['translation'][self.tgt_lang]
+        src_text = src_target_pair["src"]
+        tgt_text = src_target_pair["tgt"]
 
         enc_input_tokens=self.tokenizer_src.encode(src_text).ids
         dec_input_tokens=self.tokenizer_tgt.encode(tgt_text).ids
