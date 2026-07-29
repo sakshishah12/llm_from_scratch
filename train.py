@@ -115,7 +115,7 @@ def get_ds(config):
 
     # Shuffle and take a subset (recommended for first training)
     ds_raw = ds_raw.shuffle(seed=42)
-    ds_raw = ds_raw.select(range(50000))      # Change to 50000, 200000, etc.
+    ds_raw = ds_raw.select(range(100000))      # Change to 50000, 200000, etc.
 
     print(ds_raw[0])
 

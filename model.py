@@ -61,7 +61,7 @@ class FeedForwardBlock(nn.Module):
         return self.linear_2(self.dropout(torch.relu(self.linear_1(x))))
 
 class MultiHeadAttentionBlock(nn.Module):
-    def __init__(self, d_model: int, h: int, dropout: float):
+    def __init__(self, d_model, h, dropout):
         super().__init__()
 
         self.d_model = d_model
@@ -78,25 +78,30 @@ class MultiHeadAttentionBlock(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
+        # Store attention
+        self.attention_scores = None
+
     @staticmethod
     def attention(query, key, value, mask, dropout):
 
-        dropout_p = dropout.p if dropout is not None and dropout.training else 0.0
+        d_k = query.shape[-1]
 
-        # Convert mask to boolean if necessary
+        scores = (query @ key.transpose(-2, -1)) / math.sqrt(d_k)
+
         if mask is not None:
-            mask = mask.bool()
+            scores = scores.masked_fill(
+                mask == 0,
+                torch.finfo(scores.dtype).min
+            )
 
-        x = F.scaled_dot_product_attention(
-            query=query,
-            key=key,
-            value=value,
-            attn_mask=mask,
-            dropout_p=dropout_p,
-            is_causal=False,
-        )
+        attention_scores = torch.softmax(scores, dim=-1)
 
-        return x, None
+        if dropout is not None:
+            attention_scores = dropout(attention_scores)
+
+        output = attention_scores @ value
+
+        return output, attention_scores
 
     def forward(self, q, k, v, mask):
 
@@ -125,12 +130,12 @@ class MultiHeadAttentionBlock(nn.Module):
             self.d_k
         ).transpose(1, 2)
 
-        x, _ = MultiHeadAttentionBlock.attention(
+        x, self.attention_scores = MultiHeadAttentionBlock.attention(
             query,
             key,
             value,
             mask,
-            self.dropout,
+            self.dropout
         )
 
         x = (
